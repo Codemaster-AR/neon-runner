@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neon Runner</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background-color: #050505;
+            color: #0ff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            touch-action: none;
+        }
+
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.2);
+            border: 2px solid #0ff;
+            border-radius: 8px;
+        }
+
+        canvas {
+            display: block;
+            background: radial-gradient(circle at center, #1a1a1a 0%, #050505 100%);
+            cursor: none;
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+        }
+
+        .stat {
+            font-size: 1.2rem;
+            text-shadow: 0 0 10px #0ff;
+            margin-bottom: 5px;
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 10;
+        }
+
+        h1 {
+            font-size: 3rem;
+            margin: 0;
+            text-transform: uppercase;
+            letter-spacing: 5px;
+            text-shadow: 0 0 20px #0ff;
+        }
+
+        button {
+            margin-top: 20px;
+            padding: 10px 30px;
+            background: transparent;
+            border: 2px solid #0ff;
+            color: #0ff;
+            font-size: 1.2rem;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.3s;
+            border-radius: 4px;
+        }
+
+        button:hover {
+            background: #0ff;
+            color: #000;
+            box-shadow: 0 0 20px #0ff;
+        }
+
+        #instructions {
+            margin-top: 15px;
+            color: #888;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="ui">
+            <div class="stat">SCORE: <span id="scoreVal">0</span></div>
+            <div class="stat">LEVEL: <span id="levelVal">1</span></div>
+        </div>
+
+        <div id="overlay">
+            <h1 id="title">NEON RUNNER</h1>
+            <p id="finalScore" style="display: none;"></p>
+            <button id="startBtn">Start Game</button>
+            <div id="instructions">Move mouse or touch to dodge red blocks</div>
+        </div>
+
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreVal = document.getElementById('scoreVal');
+        const levelVal = document.getElementById('levelVal');
+        const overlay = document.getElementById('overlay');
+        const startBtn = document.getElementById('startBtn');
+        const title = document.getElementById('title');
+        const finalScoreText = document.getElementById('finalScore');
+
+        // Game state
+        let gameActive = false;
+        let score = 0;
+        let level = 1;
+        let player = { x: 0, y: 0, radius: 15 };
+        let obstacles = [];
+        let particles = [];
+        let animationFrameId;
+        let spawnRate = 40;
+        let frameCount = 0;
+
+        // Resize canvas
+        function resize() {
+            canvas.width = Math.min(window.innerWidth * 0.9, 800);
+            canvas.height = Math.min(window.innerHeight * 0.7, 500);
+            player.x = canvas.width / 2;
+            player.y = canvas.height - 50;
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Input handling
+        const updatePosition = (e) => {
+            if (!gameActive) return;
+            const rect = canvas.getBoundingClientRect();
+            let clientX;
+            
+            if (e.touches) {
+                clientX = e.touches[0].clientX;
+            } else {
+                clientX = e.clientX;
+            }
+            
+            player.x = clientX - rect.left;
+            
+            // Constrain player
+            if (player.x < player.radius) player.x = player.radius;
+            if (player.x > canvas.width - player.radius) player.x = canvas.width - player.radius;
+        };
+
+        canvas.addEventListener('mousemove', updatePosition);
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            updatePosition(e);
+        }, { passive: false });
+
+        // Obstacle management
+        class Obstacle {
+            constructor() {
+                this.width = 30 + Math.random() * 50;
+                this.height = 15;
+                this.x = Math.random() * (canvas.width - this.width);
+                this.y = -this.height;
+                this.speed = 3 + (level * 0.5);
+                this.color = `hsl(${Math.random() * 30}, 100%, 50%)`; // Reddish hues
+            }
+
+            update() {
+                this.y += this.speed;
+                return this.y > canvas.height;
+            }
+
+            draw() {
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = this.color;
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+                ctx.shadowBlur = 0;
+            }
+        }
+
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.vx = (Math.random() - 0.5) * 10;
+                this.vy = (Math.random() - 0.5) * 10;
+                this.alpha = 1;
+                this.color = color;
+            }
+
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.alpha -= 0.02;
+                return this.alpha <= 0;
+            }
+
+            draw() {
+                ctx.globalAlpha = this.alpha;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            }
+        }
+
+        function createExplosion(x, y, color) {
+            for (let i = 0; i < 20; i++) {
+                particles.push(new Particle(x, y, color));
+            }
+        }
+
+        function resetGame() {
+            score = 0;
+            level = 1;
+            obstacles = [];
+            particles = [];
+            spawnRate = 40;
+            frameCount = 0;
+            scoreVal.textContent = score;
+            levelVal.textContent = level;
+            gameActive = true;
+            overlay.style.display = 'none';
+            loop();
+        }
+
+        function gameOver() {
+            gameActive = false;
+            cancelAnimationFrame(animationFrameId);
+            createExplosion(player.x, player.y, '#0ff');
+            
+            setTimeout(() => {
+                title.textContent = "CRASHED";
+                finalScoreText.textContent = `FINAL SCORE: ${Math.floor(score)}`;
+                finalScoreText.style.display = 'block';
+                startBtn.textContent = "Restart";
+                overlay.style.display = 'flex';
+            }, 500);
+        }
+
+        function drawPlayer() {
+            // Ship shadow/glow
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#0ff';
+            
+            // Draw a triangular ship
+            ctx.fillStyle = '#0ff';
+            ctx.beginPath();
+            ctx.moveTo(player.x, player.y - player.radius);
+            ctx.lineTo(player.x - player.radius, player.y + player.radius);
+            ctx.lineTo(player.x + player.radius, player.y + player.radius);
+            ctx.closePath();
+            ctx.fill();
+
+            // Core
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(player.x, player.y + 5, 5, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.shadowBlur = 0;
+        }
+
+        function loop() {
+            if (!gameActive) {
+                // Keep drawing explosions even if game over
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                particles = particles.filter(p => !p.update());
+                particles.forEach(p => p.draw());
+                if (particles.length > 0) requestAnimationFrame(loop);
+                return;
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Update level and difficulty
+            score += 0.1;
+            scoreVal.textContent = Math.floor(score);
+            
+            let newLevel = Math.floor(score / 100) + 1;
+            if (newLevel > level) {
+                level = newLevel;
+                levelVal.textContent = level;
+                spawnRate = Math.max(10, 40 - (level * 2));
+            }
+
+            // Spawn obstacles
+            frameCount++;
+            if (frameCount % spawnRate === 0) {
+                obstacles.push(new Obstacle());
+            }
+
+            // Draw player
+            drawPlayer();
+
+            // Update & Draw Obstacles
+            obstacles = obstacles.filter(obs => {
+                obs.draw();
+                const crashed = obs.update();
+
+                // Simple collision detection (AABB)
+                const px = player.x - 10;
+                const py = player.y - 10;
+                const pw = 20;
+                const ph = 20;
+
+                if (px < obs.x + obs.width &&
+                    px + pw > obs.x &&
+                    py < obs.y + obs.height &&
+                    py + ph > obs.y) {
+                    gameOver();
+                }
+
+                return !crashed;
+            });
+
+            // Particles
+            particles = particles.filter(p => !p.update());
+            particles.forEach(p => p.draw());
+
+            animationFrameId = requestAnimationFrame(loop);
+        }
+
+        startBtn.addEventListener('click', resetGame);
+
+        // Initial background effect
+        function drawIntro() {
+            if (gameActive) return;
+            ctx.fillStyle = 'rgba(5, 5, 5, 0.1)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            requestAnimationFrame(drawIntro);
+        }
+        drawIntro();
+
+    </script>
+</body>
+</html>
